@@ -1,5 +1,5 @@
-# Naive Baayes Classifier  
-This is a Python implementation of a Naive Bayes Classifier that has two important features:  
+# Naive Bayes Classifier  
+This is a Python implementation of a Naive Bayes Classifier that has two useful attributes:  
   
 1. continuous features can be merged with multinomial features; and  
 2. missing data in both the output class and input features will be handled without error.  
