@@ -23,6 +23,7 @@
 
 import pandas as pd
 import numpy as np
+from pandas.core.base import DataError
 
 
 def generate_CLG(data, outcome_var = 'y', cont_var = 'x'):
@@ -56,8 +57,10 @@ def generate_CPD(data, outcome_var = 'y', nom_var = 'x'):
     y_levels = y_levels[~np.isnan(y_levels)]
 
     x_levels = np.unique(sub_df[nom_var])
-    x_levels = x_levels[~np.isnan(x_levels)]
-
+    try:
+        x_levels = x_levels[~np.isnan(x_levels)]
+    except TypeError:
+        print 'TypeError: failed to drop nan entries from %s, please review data in this variable' %(nom_var)
 
     temp_entry = {}
     for l_x in x_levels:
@@ -79,7 +82,7 @@ def generate_CPD(data, outcome_var = 'y', nom_var = 'x'):
 
     for l_y in y_levels:
         for row in sub_df.values:
-            if np.isnan(row).any():
+            if np.isnan(row).any(): # this will fail if the variable is not numeric
                 continue
             elif row[0] == l_y:
                 obs[str(l_y)].append(row[1])
@@ -92,7 +95,6 @@ def generate_CPD(data, outcome_var = 'y', nom_var = 'x'):
                 total = 1.0
 
             num = len(obs[str(l_y)])
-
             p = float(total)/num
 
             CPD[str(l_y)][str(l_x)] = p
@@ -172,7 +174,11 @@ class NB_Classifier(object):
 
         CLG_list = {}
         for var in self.cont_vars:
-            CLG = generate_CLG(self.data, self.outcome_var, var)
+            try:
+                CLG = generate_CLG(self.data, self.outcome_var, var)
+            except DataError:
+            	print 'DataError: data in the variable %s is not numeric, please convert to numeric and re-run' %(var)
+
             CLG_list.update({str(var):CLG})
 
         self.CLG_list = CLG_list
@@ -183,7 +189,11 @@ class NB_Classifier(object):
 
         CPD_list = {}
         for var in self.nom_vars:
-            CPD = generate_CPD(self.data, self.outcome_var, var)
+            try:
+                CPD = generate_CPD(self.data, self.outcome_var, var)
+            except ZeroDivisionError:
+                print 'ZeroDivisionError: there is no data entered for the variable %s' %(var)
+
             CPD_list.update({str(var):CPD})
 
         self.CPD_list = CPD_list
@@ -191,7 +201,7 @@ class NB_Classifier(object):
         return
 
         
-    def inference(self, test_data = pd.DataFrame([])):
+    def inference(self, test_data = pd.DataFrame([]), hyper_prevalence_params = None):
         # grab test data if given
         if not test_data.empty:
             print 'Inferencing on Test Data'
@@ -243,7 +253,11 @@ class NB_Classifier(object):
             cls_probs[cls_probs==1.0]=np.nan
 
             # multiply the resuling probabilities with the prevalence
-            cls_probs = cls_probs * self.prevalence_params[str(float(cls))]
+            if hyper_prevalence_params == None:
+                cls_probs = cls_probs * self.prevalence_params[str(float(cls))]
+            else:
+                print 'Using user-defined prevalence parameters'
+                cls_probs = cls_probs * hyper_prevalence_params[str(float(cls))]
 
             # add to dictionary with result for each class
             class_probabilities.update({cls:cls_probs})
@@ -251,12 +265,6 @@ class NB_Classifier(object):
         self.class_probabilities = class_probabilities
         
         # compute the predicted class
-        probability_matrix = []
-        for key,values in self.class_probabilities.items():
-            probability_matrix.append(values)
-
-        probability_matrix = np.array(probability_matrix)
-
         argmax = np.array([i for i in np.argmax(self.class_probabilities.values(), axis=0)])
         prediction = [self.class_probabilities.keys()[i] for i in argmax]
 
