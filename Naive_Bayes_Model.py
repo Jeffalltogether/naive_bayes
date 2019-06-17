@@ -217,7 +217,7 @@ class NB_Classifier(object):
         y_levels = y_levels[~np.isnan(y_levels)]
 
         # compute Probability of each Class in outcome_var
-        class_probabilities = {}
+        log_class_probabilities = {}
         for cls in y_levels:
             cls = str(float(cls))
 
@@ -233,7 +233,6 @@ class NB_Classifier(object):
 
                 # compute for multinomial variables based on Tabular Conditional Probability Distribution 
                 if var in self.nom_vars:
-
                     p = np.vectorize(CPT_calculateProbability, excluded=['CPD'])(input_data[var], self.CPD_list[var], cls)
 
                     conditional_probs.append(p)
@@ -245,28 +244,32 @@ class NB_Classifier(object):
             conditional_probs[np.isnan(conditional_probs)]=1.0
 
             # multiply conditional proability for each feature from each observation 
-            cls_probs = conditional_probs[0]
+            # Note: use log probabilities to avoid difficulty with the precision of floating point values
+            # math: log(a*b) = log(a) + log(b)
+            log_cls_probs = np.log(conditional_probs[0])
             for i in range(len(conditional_probs)-1):
-                cls_probs *= conditional_probs[i+1]
+                log_cls_probs += np.log(conditional_probs[i+1])
 
-            # if any are exactly 1.0 we know that all entries for that observation were nan's, we can replace these with nan
-            cls_probs[cls_probs==1.0]=np.nan
+            # if any are exactly 0.0 we know that all entries for that observation were nan's, we can replace these with nan
+            log_cls_probs[log_cls_probs==0.0]=np.nan
 
             # multiply the resuling probabilities with the prevalence
             if hyper_prevalence_params == None:
-                cls_probs = cls_probs * self.prevalence_params[str(float(cls))]
+                log_prior_p = np.log(self.prevalence_params[str(float(cls))])
+                log_cls_probs = log_cls_probs + log_prior_p
             else:
                 print 'Using user-defined prevalence parameters'
-                cls_probs = cls_probs * hyper_prevalence_params[str(float(cls))]
+                log_prior_p = np.log(hyper_prevalence_params[str(float(cls))])
+                log_cls_probs = log_cls_probs + log_prior_p
 
             # add to dictionary with result for each class
-            class_probabilities.update({cls:cls_probs})
+            log_class_probabilities.update({cls:log_cls_probs})
 
-        self.class_probabilities = class_probabilities
+        self.log_class_probabilities = log_class_probabilities
         
         # compute the predicted class
-        argmax = np.array([i for i in np.argmax(self.class_probabilities.values(), axis=0)])
-        prediction = [self.class_probabilities.keys()[i] for i in argmax]
+        argmax = np.array([i for i in np.argmax(self.log_class_probabilities.values(), axis=0)])
+        prediction = [self.log_class_probabilities.keys()[i] for i in argmax]
 
         self.prediction = prediction
 
