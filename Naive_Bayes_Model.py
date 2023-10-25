@@ -23,181 +23,41 @@
 
 import pandas as pd
 import numpy as np
-from pandas.core.base import DataError
+# from pandas.core.base import DataError
 from scipy.stats import expon
-
-def generate_CLG(data, outcome_var = 'y', cont_var = 'x'):
-    # separate the data
-    sub_df = data[[outcome_var, cont_var]]
-
-    # compute levels of outcome variable
-    y_levels = np.unique(sub_df[outcome_var])
-    y_levels = y_levels[~np.isnan(y_levels)]
-
-    # compute the means and standard deviations for each continuous variable
-    CLG_means = sub_df.groupby([outcome_var], as_index=False).mean()
-    CLG_stds = sub_df.groupby([outcome_var], as_index=False).std()
-
-    CLG_params = {}
-    for l_y in y_levels:
-        CLG_params.update({str(float(l_y)): []})
-
-    for row_m, row_s in zip(CLG_means.values, CLG_stds.values):
-        CLG_params.update({str(row_m[0]): [row_m[1], row_s[1]]})
-
-    return CLG_params
-
-def generate_CPD(data, outcome_var = 'y', nom_var = 'x'):
-    import copy
-
-    sub_df = data[[outcome_var, nom_var]]
-
-    y_levels = np.unique(sub_df[outcome_var])
-    y_levels = y_levels[~np.isnan(y_levels)]
-
-    x_levels = np.unique(sub_df[nom_var])
-    try:
-        x_levels = x_levels[~np.isnan(x_levels)]
-    except TypeError:
-        print 'TypeError: failed to drop nan entries from %s, please review data in this variable' %(nom_var)
-
-    temp_entry = {}
-    for l_x in x_levels:
-        temp = {str(l_x):0.0}
-        temp = copy.deepcopy(temp)
-        temp_entry.update(temp)
-
-    obs = {}
-    temp_CPD = {}
-    for l_y in y_levels:
-        obs.update({str(l_y): []})
-        for l_x in x_levels:
-            temp = {str(l_y): temp_entry}
-            temp = copy.deepcopy(temp)
-            temp_CPD.update(temp)
-
-    CPD = copy.deepcopy(temp_CPD)
+from sklearn.base import ClassifierMixin
+from sklearn.base import BaseEstimator
 
 
-    for l_y in y_levels:
-        for row in sub_df.values:
-            if np.isnan(row).any(): # this will fail if the variable is not numeric
-                continue
-            elif row[0] == l_y:
-                obs[str(l_y)].append(row[1])
-
-    for l_y in y_levels:
-        for l_x in x_levels:
-            total = np.sum(np.array(obs[str(l_y)]) == l_x)
-
-            if total == 0.0:
-                total = 1.0
-
-            num = len(obs[str(l_y)])
-            p = float(total)/num
-
-            CPD[str(l_y)][str(l_x)] = p
-
-    return CPD
-
-def generate_Expon(data, outcome_var = 'y', cont_var = 'x'):
-    # separate the data
-    sub_df = data[[outcome_var, cont_var]]
-
-    # compute levels of outcome variable
-    y_levels = np.unique(sub_df[outcome_var])
-    y_levels = y_levels[~np.isnan(y_levels)]
-
-    # compute the start position and beta for each exponential variable
-    Expon_params = {}
-    for level in y_levels:
-        # get x data from our small pandas dataframe
-        x = sub_df.loc[sub_df[outcome_var] == level]
-        x = x[cont_var].values
-        x = x[~np.isnan(x)]
-
-        # fit exponential distribution
-        Expon_position_beta = expon.fit(x)
-        
-        # add to dictionary
-        Expon_params.update({str(float(level)): list(Expon_position_beta)})
-
-    return Expon_params
-
-def CLG_calculateProbability(x, CPD, cls):
-    '''
-    Here is our function for calculating the probability that an unknown entry belongs to a certain class
-    for our Conditional Linear Gaussian
-    '''
-    import scipy.stats
-
-    if np.isnan(x):
-        return np.nan
-
-    else:
-        x = float(x)
-        cls = str(float(cls))
-
-        mean = CPD[cls][0]
-        stdev = CPD[cls][1]
-
-        p = 2.0 * scipy.stats.norm.cdf(-1.0 * np.abs(x-mean), 0,stdev)
-
-        return p
-
-def CPT_calculateProbability(x, CPD, cls):
-    '''
-    Here is our function for calculating the probability that an unknown entry belongs to a certain class
-    for our Conditional Probability Distributions
-    '''
-
-    if np.isnan(x):
-        return np.nan
-
-    else:
-        x = str(float(x))
-        cls = str(float(cls))
-
-        try:
-            p = CPD[cls][x]
-
-        except KeyError:
-            p = np.nan
-
-        return p
-
-def Expon_calculateProbability(x, CPD, cls):
-    '''
-    Calculate the probability that an unknown entry belongs to a certain class
-    for our exponential distributions
-    '''
-
-    if np.isnan(x):
-        return np.nan
-
-    else:
-        x = float(x)
-        cls = str(float(cls))
-
-        position = CPD[cls][0]
-        beta = CPD[cls][1]
-
-        fit_exponential = expon(position, beta)
-        p = 1-fit_exponential.cdf(x)
-
-        return p
 
 
-class NB_Classifier(object):
+class NB_Classifier(BaseEstimator, ClassifierMixin):
     import numpy as np
     import pandas as pd
 
-    def __init__(self, training_df, outcome_variable = 'y', gaussian_variables = [], multinomial_variables = [], exponential_variables = []):
+    def __init__(self, training_df=[], outcome_variable = 'y', gaussian_variables = [], multinomial_variables = [], exponential_variables = []):
         self.data = training_df
         self.outcome_var = outcome_variable
         self.gaussian_vars = gaussian_variables
         self.nom_vars = multinomial_variables
         self.expon_vars = exponential_variables
+
+        return
+
+    def fit(self):
+        # compute the prevaluence of each outcome class
+        self.train_prevalence()
+
+        # compute the Conditional Linear Gaussian parameters for Gaussian variables
+        self.train_CLG_variables()
+
+        # compute the Conditional Linear Gaussian parameters for exponential variables
+        self.train_Exponential_variables()
+
+        # compute the Tabular CPD parameters for our binomial variables
+        self.train_multinomial_variables()
+
+        return
         
         
     def train_prevalence(self):
@@ -220,9 +80,9 @@ class NB_Classifier(object):
         CLG_list = {}
         for var in self.gaussian_vars:
             try:
-                CLG = generate_CLG(self.data, self.outcome_var, var)
-            except DataError:
-            	print 'DataError: data in the variable %s is not numeric, please convert to numeric and re-run' %(var)
+                CLG = self.generate_CLG(self.data, self.outcome_var, var)
+            except:
+            	print('DataError: data in the variable %s is not numeric, please convert to numeric and re-run' %(var))
 
             CLG_list.update({str(var):CLG})
 
@@ -235,9 +95,9 @@ class NB_Classifier(object):
         CPD_list = {}
         for var in self.nom_vars:
             try:
-                CPD = generate_CPD(self.data, self.outcome_var, var)
+                CPD = self.generate_CPD(self.data, self.outcome_var, var)
             except ZeroDivisionError:
-                print 'ZeroDivisionError: there is no data entered for the variable %s' %(var)
+                print('ZeroDivisionError: there is no data entered for the variable %s' %(var))
 
             CPD_list.update({str(var):CPD})
 
@@ -250,9 +110,9 @@ class NB_Classifier(object):
         Expon_list = {}
         for var in self.expon_vars:
             try:
-                Exponential = generate_Expon(self.data, self.outcome_var, var)
-            except DataError:
-            	print 'DataError: data in the variable %s is not numeric, please convert to numeric and re-run' %(var)
+                Exponential = self.generate_Expon(self.data, self.outcome_var, var)
+            except:
+            	print('DataError: data in the variable %s is not numeric, please convert to numeric and re-run' %(var))
 
             Expon_list.update({str(var):Exponential})
 
@@ -260,51 +120,47 @@ class NB_Classifier(object):
         
         return
 
-    def inference(self, test_data = pd.DataFrame([]), hyper_prevalence_params = None):
+    def predict(self, test_data = pd.DataFrame([]), hyper_prevalence_params = None):
         # grab test data if given
         if not test_data.empty:
-            print 'Inferencing on Test Data'
+            print('Inferencing on Test Data')
             self.data = test_data
         else:
-            print 'Inferencing on Training Data'
+            print('Inferencing on Training Data')
         
         # drop the outcome variable from the input data frame
         input_data = self.data.drop(self.outcome_var, axis=1)
 
-        # get the levels of the outcome variable exclusing the nan's
+        # get the levels of the outcome variable excluding the nan's
         y_levels = np.unique(self.data[self.outcome_var])
         y_levels = y_levels[~np.isnan(y_levels)]
 
         # compute Probability of each Class in outcome_var
         log_class_probabilities = {}
-        for cls in y_levels:
-            cls = str(float(cls))
+        for class_i in y_levels:
+            class_i = str(float(class_i))
 
             # generate aray of conditional probabilitis for each feature 
             conditional_probs = []
             for var in input_data.columns:
                 # compute for Gaussian variables based on Conditional Linear Gaussian 
                 if var in self.gaussian_vars:
-
-                    p = np.vectorize(CLG_calculateProbability, excluded=['CPD'])(input_data[var], self.CLG_list[var], cls)
-
+                    p = np.vectorize(self.CLG_calculateProbability, excluded=['CPD'])(input_data[var], self.CLG_list[var], class_i)
                     conditional_probs.append(p)
 
                 # compute for multinomial variables based on Tabular Conditional Probability Distribution 
                 if var in self.nom_vars:
-                    p = np.vectorize(CPT_calculateProbability, excluded=['CPD'])(input_data[var], self.CPD_list[var], cls)
-
+                    p = np.vectorize(self.CPT_calculateProbability, excluded=['CPD'])(input_data[var], self.CPD_list[var], class_i)
                     conditional_probs.append(p)
 
                 # compute for exponential variables based on Conditional Linear Gaussian 
                 if var in self.expon_vars:
-
-                    p = np.vectorize(Expon_calculateProbability, excluded=['CPD'])(input_data[var], self.Expon_list[var], cls)
-
+                    p = np.vectorize(self.Expon_calculateProbability, excluded=['CPD'])(input_data[var], self.Expon_list[var], class_i)
                     conditional_probs.append(p)
 
             # convert to np.array
             conditional_probs = np.array(conditional_probs)
+
 
             # temporarily replace nan's with 1.0
             conditional_probs[np.isnan(conditional_probs)]=1.0
@@ -317,34 +173,39 @@ class NB_Classifier(object):
             # math: log(a*b) = log(a) + log(b)
             
             # get log(p) of first CPs
-            log_cls_probs = np.log(conditional_probs[0])
+            log_cls_probs = np.zeros(len(conditional_probs[0]))
 
             # Add remining log(p)'s
-            for i in range(len(conditional_probs)-1):
-                log_cls_probs += np.log(conditional_probs[i+1])
+            for i in range(len(conditional_probs)):
+                log_cls_probs += np.log(conditional_probs[i])
 
             # if any are exactly 0.0 we know that all entries for that observation were nan's, we can replace these with nan
-            log_cls_probs[log_cls_probs==0.0]=np.nan
+            # log_cls_probs[log_cls_probs==0.0]=np.nan
 
             # multiply the resuling probabilities with the prevalence
             if hyper_prevalence_params == None:
-                log_prior_p = np.log(self.prevalence_params[str(float(cls))])
+                log_prior_p = np.log(self.prevalence_params[str(float(class_i))])
                 log_cls_probs = log_cls_probs + log_prior_p
             else:
-                print 'Using user-defined prevalence parameters'
-                log_prior_p = np.log(hyper_prevalence_params[str(float(cls))])
+                print('Using user-defined prevalence parameters')
+                log_prior_p = np.log(hyper_prevalence_params[str(float(class_i))])
                 log_cls_probs = log_cls_probs + log_prior_p
 
             # add to dictionary with result for each class
-            log_class_probabilities.update({cls:log_cls_probs})
+            log_class_probabilities.update({class_i:log_cls_probs})
 
         self.log_class_probabilities = log_class_probabilities
-        
-        # compute the predicted class
-        argmax = np.array([i for i in np.argmax(self.log_class_probabilities.values(), axis=0)])
-        prediction = [self.log_class_probabilities.keys()[i] for i in argmax]
+        self.classes_in_order = list(self.log_class_probabilities.keys())
 
-        self.prediction = prediction
+        # compute the predicted class
+        pred_prob_results = np.array([v for k,v in self.log_class_probabilities.items()])
+        argmax = np.array([i for i in np.argmax(pred_prob_results, axis=0)])
+
+        self.prediction = [self.classes_in_order[i] for i in argmax]
+
+        self.log_probabilities = []
+        for i,a in enumerate(argmax):
+            self.log_probabilities.append(np.exp(pred_prob_results[a,i]))
 
         return
 
@@ -370,13 +231,154 @@ class NB_Classifier(object):
         outcome_array = outcome_array[~np.isnan(outcome_array)]    
 
         accuracy = float(sum(outcome_array)) / len(outcome_array)
-        print 'algorithm accuracy: %.5f' %(accuracy)
+        print('algorithm accuracy: %.5f' %(accuracy))
 
         self.ground_truth = ground_truth
         self.outcome = outcome
         self.accuracy = accuracy
         
         return
+
+    @staticmethod
+    def generate_CLG(data, outcome_var = 'y', cont_var = 'x'):
+        # separate the data
+        sub_df = data[[outcome_var, cont_var]]
+
+        # compute levels of outcome variable
+        y_levels = np.unique(sub_df[outcome_var])
+        y_levels = y_levels[~np.isnan(y_levels)]
+
+        # compute the means and standard deviations for each continuous variable
+        CLG_means = sub_df.groupby([outcome_var], as_index=False).mean()
+        CLG_stds = sub_df.groupby([outcome_var], as_index=False).std()
+
+        CLG_params = {}
+        for l_y in y_levels:
+            CLG_params.update({str(float(l_y)): []})
+
+        for row_m, row_s in zip(CLG_means.values, CLG_stds.values):
+            CLG_params.update({str(row_m[0]): [row_m[1], row_s[1]]})
+
+        return CLG_params
+
+    @staticmethod
+    def generate_CPD(data, outcome_var = 'y', nom_var = 'x'):
+
+        df2 = data[[outcome_var,nom_var]].reset_index().groupby([outcome_var, nom_var]).count().unstack(nom_var).fillna(0)
+        df2.columns = df2.columns.droplevel(0)
+
+        # # handle the "zero frequency problem" for instances returning P(y|x)=0
+        # if 0 in df2.values:
+        #     df2 += 1 # add 1 to every cell in the frequency counts
+
+        df3 = df2.divide(df2.sum(axis=1), axis=0)
+
+        CPD = dict()
+        for row in df3.iterrows():
+            i = row[0]
+            CPD.update({ str(float(row[1].index[i])): { str(float(val)):prob for val,prob in zip(row[1].index,row[1]) } })
+
+        return CPD
+
+    @staticmethod
+    def generate_Expon(data, outcome_var = 'y', cont_var = 'x'):
+        # separate the data
+        sub_df = data[[outcome_var, cont_var]]
+
+        # compute levels of outcome variable
+        y_levels = np.unique(sub_df[outcome_var])
+        y_levels = y_levels[~np.isnan(y_levels)]
+
+        # compute the start position and beta for each exponential variable
+        Expon_params = {}
+        for level in y_levels:
+            # get x data from our small pandas dataframe
+            x = sub_df.loc[sub_df[outcome_var] == level]
+            x = x[cont_var].values
+            x = x[~np.isnan(x)]
+
+            # fit exponential distribution
+            Expon_position_beta = expon.fit(x)
+            
+            # add to dictionary
+            Expon_params.update({str(float(level)): list(Expon_position_beta)})
+
+        return Expon_params
+
+    @staticmethod
+    def CLG_calculateProbability(x, CPD, class_i):
+        '''
+        Here is our function for calculating the probability that an unknown entry belongs to a certain class
+        for our Conditional Linear Gaussian
+        '''
+        # Calculate the Gaussian probability distribution function for x
+
+        def calculate_probability(xx, mm, ss):
+            exponent = np.exp(-( (xx-mm)**2 / (2 * ss**2 ) ) ) 
+            return (1 / (np.sqrt(2 * 3.141592653589793) * ss)) * exponent
+
+
+
+        import scipy.stats
+
+        if np.isnan(x):
+            return np.nan
+
+        else:
+            x = float(x)
+            class_i = str(float(class_i))
+
+            mean = CPD[class_i][0]
+            stdev = CPD[class_i][1]
+
+            p = 2.0 * scipy.stats.norm.cdf(-1.0 * np.abs(x-mean), 0,stdev) ## <-Cumulative Probability Distribution * 2
+
+            return p
+
+    @staticmethod
+    def CPT_calculateProbability(x, CPD, class_i):
+        '''
+        Here is our function for calculating the probability that an unknown entry belongs to a certain class
+        for our Conditional Probability Distributions
+        '''
+        if np.isnan(x):
+            return np.nan
+
+        else:
+            x = str(float(x))
+            class_i = str(float(class_i))
+
+            try:
+                p = CPD[class_i][x]
+
+            except KeyError:
+
+                print('KeyError: returning NAN')
+                p = np.nan
+
+            return p
+
+    @staticmethod
+    def Expon_calculateProbability(x, CPD, class_i):
+        '''
+        Calculate the probability that an unknown entry belongs to a certain class
+        for our exponential distributions
+        '''
+
+        if np.isnan(x):
+            return np.nan
+
+        else:
+            x = float(x)
+            class_i = str(float(class_i))
+
+            position = CPD[class_i][0]
+            beta = CPD[class_i][1]
+
+            fit_exponential = expon(position, beta)
+            p = 1-fit_exponential.cdf(x)
+
+            return p
 
 
 if __name__ == "__main__":
